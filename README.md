@@ -57,7 +57,7 @@ brew install cmake
 **macOS-specific notes:**
 - Apple Silicon (M1/M2/M3/M4): Uses `-Wl,-force_load` for static factory registration
 - The build links against system `libc++` and `libz`/`libbz2`
-- `MetricType::COSINE` does not work on ARM64 due to a NEON normalizer issue in zvec — ExZvec uses `MetricType::IP` instead, which gives identical results with L2-normalized embeddings (OpenAI, Cohere, etc.)
+- ExZvec uses `MetricType::IP` (inner product) by default. With L2-normalized embeddings (OpenAI, Cohere, etc.), IP gives identical results to cosine similarity. `COSINE` also works but adds an unnecessary normalization step
 
 ### Linux (Ubuntu/Debian)
 
@@ -356,11 +356,11 @@ Tests include:
 
 ## Known Limitations
 
-- **COSINE metric on macOS ARM64** — `MetricType::COSINE` fails due to a NEON vector normalizer issue in zvec's `ailego` library. ExZvec uses `MetricType::IP` (inner product) instead. With L2-normalized embeddings (OpenAI, Cohere, Voyage, etc. all return normalized vectors), IP gives mathematically identical results to cosine similarity.
-
 - **Single-node only** — zvec is an embedded database, not a distributed one. For horizontal scaling, shard at the application level.
 
-- **Exit-time segfault** — The BEAM process may segfault on shutdown due to C++ static destructor ordering issues in glog/protobuf/gflags. This does not affect functionality — all operations work correctly during the lifetime of the process. In production (long-running) apps, this is not visible since you rarely shut down the VM. In tests, `mix test` may report exit code 139 even though all tests pass.
+- **Exit-time segfault** — The BEAM process may segfault on shutdown due to C++ static destructor ordering issues in glog/protobuf/gflags ([alibaba/zvec#206](https://github.com/alibaba/zvec/issues/206)). This does not affect functionality — all operations work correctly during the lifetime of the process. In production (long-running) apps, this is not visible since you rarely shut down the VM. In tests, `mix test` may report exit code 139 even though all tests pass.
+
+- **Linux ARM64 build** — Building zvec from source on Linux ARM64 with GCC requires a cmake fix for FP16 NEON intrinsics ([alibaba/zvec#205](https://github.com/alibaba/zvec/pull/205)). The included Dockerfile handles this by building on x86_64. If building natively on ARM64, use the patched fork at [thedonmon/zvec](https://github.com/thedonmon/zvec/tree/fix/arm64-fp16-neon) until the fix is merged upstream.
 
 ## License
 
