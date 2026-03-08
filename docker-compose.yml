@@ -1,0 +1,28 @@
+services:
+  # Run the full test suite
+  test:
+    build:
+      context: .
+      target: test
+    command: mix test --trace
+
+  # Build zvec only (useful for caching / debugging build issues)
+  zvec-build:
+    build:
+      context: .
+      target: zvec-builder
+    command: ["ls", "-la", "/opt/zvec/build/lib/"]
+
+  # Interactive shell for debugging
+  dev:
+    build:
+      context: .
+      target: app-builder
+    command: iex -S mix
+    stdin_open: true
+    tty: true
+    volumes:
+      - zvec-data:/var/data/zvec
+
+volumes:
+  zvec-data:
