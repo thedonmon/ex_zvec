@@ -1,0 +1,15 @@
+[package]
+name = "ex_zvec"
+version = "0.1.0"
+edition = "2021"
+description = "Rustler NIF bridge to zvec embedded vector database"
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+rustler = "0.37"
+cxx = "1.0"
+
+[build-dependencies]
+cxx-build = "1.0"
