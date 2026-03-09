@@ -30,9 +30,6 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      # Uses GHCR as a remote layer cache — the zvec C++ build (Arrow,
-      # RocksDB, protobuf, etc.) is cached across CI runs. First run is
-      # slow (~15 min), subsequent runs only rebuild Elixir/Rust changes.
       - name: Build test image
         uses: docker/build-push-action@v6
         with:
@@ -44,16 +41,4 @@ jobs:
           cache-to: type=registry,ref=${{ env.CACHE_IMAGE }}:buildcache,mode=max
 
       - name: Run tests
-        run: |
-          # Exit code 139 (SIGSEGV) is expected — zvec's C++ static destructors
-          # (glog/protobuf/gflags) crash at BEAM shutdown. This is cosmetic and
-          # doesn't affect test results. See alibaba/zvec#206.
-          exit_code=0
-          docker run --rm ex_zvec-test:latest mix test --trace || exit_code=$?
-          if [ "$exit_code" -eq 0 ] || [ "$exit_code" -eq 139 ]; then
-            echo "Tests passed (exit code: $exit_code)"
-            exit 0
-          else
-            echo "Tests failed with exit code: $exit_code"
-            exit $exit_code
-          fi
+        run: docker run --rm ex_zvec-test:latest mix test --trace

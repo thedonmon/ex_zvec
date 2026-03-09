@@ -6,13 +6,6 @@ services:
       target: test
     command: mix test --trace
 
-  # Build zvec only (useful for caching / debugging build issues)
-  zvec-build:
-    build:
-      context: .
-      target: zvec-builder
-    command: ["ls", "-la", "/opt/zvec/build/lib/"]
-
   # Interactive shell for debugging
   dev:
     build:
