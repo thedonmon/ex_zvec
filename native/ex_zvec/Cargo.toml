@@ -9,5 +9,5 @@ crate-type = ["cdylib"]
 
 [dependencies]
 rustler = "0.37"
-zvec-rs = { path = "../../../zvec-rs" }
+zvec-rs = { git = "https://github.com/thedonmon/zvec-rs" }
 serde_json = "1"
