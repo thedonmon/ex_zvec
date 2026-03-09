@@ -1,15 +1,13 @@
 [package]
 name = "ex_zvec"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2021"
-description = "Rustler NIF bridge to zvec embedded vector database"
+description = "Rustler NIF bridge to zvec-rs embedded vector database (pure Rust)"
 
 [lib]
 crate-type = ["cdylib"]
 
 [dependencies]
 rustler = "0.37"
-cxx = "1.0"
-
-[build-dependencies]
-cxx-build = "1.0"
+zvec-rs = { path = "../../../zvec-rs" }
+serde_json = "1"

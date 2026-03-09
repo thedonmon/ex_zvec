@@ -1,129 +1,87 @@
 use rustler::{NifResult, Resource, ResourceArc};
-use std::sync::Mutex;
+use std::collections::HashMap;
+use std::panic::{RefUnwindSafe, UnwindSafe};
 
-/// cxx bridge to our C++ wrapper around zvec.
-///
-/// Type mapping (Rust bridge -> C++ side):
-///   &str       -> rust::Str
-///   String     -> rust::String  (in shared structs)
-///   &[f32]     -> rust::Slice<const float>
-///   Vec<T>     -> rust::Vec<T>
-///   UniquePtr  -> std::unique_ptr
-#[cxx::bridge(namespace = "ex_zvec")]
-mod ffi {
-    /// Search result — shared struct generated on both sides.
-    struct SearchResult {
-        pk: String,
-        score: f32,
-        fields_json: String,
-    }
-
-    /// Fetch result — single document.
-    struct FetchResult {
-        pk: String,
-        fields_json: String,
-    }
-
-    unsafe extern "C++" {
-        include!("zvec_wrapper.h");
-
-        type ZvecCollection;
-
-        fn create_or_open_collection(
-            path: &str,
-            name: &str,
-            vector_dims: u32,
-            schema_json: &str,
-        ) -> UniquePtr<ZvecCollection>;
-
-        fn upsert(
-            self: &ZvecCollection,
-            pk: &str,
-            embedding: &[f32],
-            fields_json: &str,
-        ) -> bool;
-
-        fn remove(self: &ZvecCollection, pk: &str) -> bool;
-
-        fn search(
-            self: &ZvecCollection,
-            query_vector: &[f32],
-            topk: u32,
-            filter: &str,
-        ) -> Vec<SearchResult>;
-
-        fn fetch(self: &ZvecCollection, pk: &str) -> FetchResult;
-
-        fn flush(self: &ZvecCollection) -> bool;
-
-        fn optimize(self: &ZvecCollection) -> bool;
-
-        fn doc_count(self: &ZvecCollection) -> u64;
-    }
-}
+use zvec_rs::{Collection, CollectionConfig, HnswParams, MetricType};
 
 // ---------------------------------------------------------------------------
-// NIF resource: wraps a ZvecCollection behind a Mutex for thread safety
+// NIF resource: wraps a zvec-rs Collection
 // ---------------------------------------------------------------------------
 
 struct CollectionResource {
-    inner: Mutex<cxx::UniquePtr<ffi::ZvecCollection>>,
+    inner: Collection,
 }
 
-// SAFETY: zvec::Collection uses internal thread pools and is thread-safe.
-// The Mutex provides exclusive access to the UniquePtr.
+// SAFETY: zvec-rs Collection uses per-node RwLocks and atomics internally.
+// All concurrent access is handled within the Collection type.
 unsafe impl Send for CollectionResource {}
 unsafe impl Sync for CollectionResource {}
+impl UnwindSafe for CollectionResource {}
+impl RefUnwindSafe for CollectionResource {}
 
 #[rustler::resource_impl]
 impl Resource for CollectionResource {}
 
 // ---------------------------------------------------------------------------
+// JSON helpers for field serialization
+// ---------------------------------------------------------------------------
+
+fn parse_fields_json(json: &str) -> HashMap<String, String> {
+    if json.is_empty() || json == "{}" {
+        return HashMap::new();
+    }
+    serde_json::from_str(json).unwrap_or_default()
+}
+
+fn fields_to_json(fields: &HashMap<String, String>) -> String {
+    serde_json::to_string(fields).unwrap_or_else(|_| "{}".to_string())
+}
+
+// ---------------------------------------------------------------------------
 // NIF functions exposed to Elixir
 // ---------------------------------------------------------------------------
 
+/// Open or create a persistent collection at path/name.
 #[rustler::nif]
 fn open_collection(
     path: String,
     name: String,
     vector_dims: u32,
-    schema_json: String,
+    _schema_json: String,
 ) -> NifResult<ResourceArc<CollectionResource>> {
-    let coll = ffi::create_or_open_collection(&path, &name, vector_dims, &schema_json);
-    if coll.is_null() {
-        return Err(rustler::Error::Term(Box::new("failed to open collection")));
-    }
+    let config = CollectionConfig::new(vector_dims as usize)
+        .with_metric(MetricType::IP)
+        .with_hnsw_params(HnswParams::new(16, 200).with_ef_search(50));
+
+    let collection = Collection::open(&path, &name, config)
+        .map_err(|e| rustler::Error::Term(Box::new(e)))?;
+
     Ok(ResourceArc::new(CollectionResource {
-        inner: Mutex::new(coll),
+        inner: collection,
     }))
 }
 
+/// Insert or update a document.
 #[rustler::nif(schedule = "DirtyCpu")]
 fn nif_upsert(
     resource: ResourceArc<CollectionResource>,
     pk: String,
     embedding: Vec<f32>,
     fields_json: String,
-) -> NifResult<bool> {
-    let guard = resource
-        .inner
-        .lock()
-        .map_err(|_| rustler::Error::Term(Box::new("lock poisoned")))?;
-
-    Ok(guard.upsert(&pk, &embedding, &fields_json))
+) -> bool {
+    let fields = parse_fields_json(&fields_json);
+    resource.inner.upsert(&pk, &embedding, fields);
+    true
 }
 
+/// Remove a document by primary key.
 #[rustler::nif(schedule = "DirtyCpu")]
-fn nif_remove(resource: ResourceArc<CollectionResource>, pk: String) -> NifResult<bool> {
-    let guard = resource
-        .inner
-        .lock()
-        .map_err(|_| rustler::Error::Term(Box::new("lock poisoned")))?;
-    Ok(guard.remove(&pk))
+fn nif_remove(resource: ResourceArc<CollectionResource>, pk: String) -> bool {
+    resource.inner.remove(&pk)
 }
 
-/// Search by vector similarity with optional filter string.
-/// Returns list of {pk, score, fields_json}.
+/// Search by vector similarity with optional filter.
+/// Returns list of {pk, score, fields_json} tuples.
 #[rustler::nif(schedule = "DirtyCpu")]
 fn nif_search(
     resource: ResourceArc<CollectionResource>,
@@ -131,63 +89,59 @@ fn nif_search(
     topk: u32,
     filter: String,
 ) -> NifResult<Vec<(String, f32, String)>> {
-    let guard = resource
-        .inner
-        .lock()
-        .map_err(|_| rustler::Error::Term(Box::new("lock poisoned")))?;
+    let filter_expr = if filter.is_empty() {
+        None
+    } else {
+        Some(filter.as_str())
+    };
 
-    let results = guard.search(&query_vector, topk, &filter);
+    let results = resource
+        .inner
+        .search(&query_vector, topk as usize, filter_expr)
+        .map_err(|e| rustler::Error::Term(Box::new(e)))?;
 
     Ok(results
         .into_iter()
-        .map(|r| (r.pk, r.score, r.fields_json))
+        .map(|hit| {
+            let json = fields_to_json(&hit.fields);
+            (hit.pk, hit.score, json)
+        })
         .collect())
 }
 
 /// Fetch a single document by primary key.
-/// Returns {:ok, {pk, fields_json}} or {:error, :not_found}.
+/// Returns {pk, fields_json} or raises error.
 #[rustler::nif(schedule = "DirtyCpu")]
 fn nif_fetch(
     resource: ResourceArc<CollectionResource>,
     pk: String,
 ) -> NifResult<(String, String)> {
-    let guard = resource
-        .inner
-        .lock()
-        .map_err(|_| rustler::Error::Term(Box::new("lock poisoned")))?;
-    let r = guard.fetch(&pk);
-    if r.pk.is_empty() {
-        Err(rustler::Error::Term(Box::new("not_found")))
-    } else {
-        Ok((r.pk, r.fields_json))
+    match resource.inner.fetch(&pk) {
+        Some(fields) => {
+            let json = fields_to_json(&fields);
+            Ok((pk, json))
+        }
+        None => Err(rustler::Error::Term(Box::new("not_found"))),
     }
 }
 
+/// Flush writes to disk.
 #[rustler::nif(schedule = "DirtyCpu")]
 fn nif_flush(resource: ResourceArc<CollectionResource>) -> NifResult<bool> {
-    let guard = resource
-        .inner
-        .lock()
-        .map_err(|_| rustler::Error::Term(Box::new("lock poisoned")))?;
-    Ok(guard.flush())
+    resource.inner.flush()
+        .map_err(|e| rustler::Error::Term(Box::new(e)))
 }
 
+/// Optimize index.
 #[rustler::nif(schedule = "DirtyCpu")]
-fn nif_optimize(resource: ResourceArc<CollectionResource>) -> NifResult<bool> {
-    let guard = resource
-        .inner
-        .lock()
-        .map_err(|_| rustler::Error::Term(Box::new("lock poisoned")))?;
-    Ok(guard.optimize())
+fn nif_optimize(_resource: ResourceArc<CollectionResource>) -> bool {
+    true
 }
 
+/// Get document count.
 #[rustler::nif]
-fn nif_doc_count(resource: ResourceArc<CollectionResource>) -> NifResult<u64> {
-    let guard = resource
-        .inner
-        .lock()
-        .map_err(|_| rustler::Error::Term(Box::new("lock poisoned")))?;
-    Ok(guard.doc_count())
+fn nif_doc_count(resource: ResourceArc<CollectionResource>) -> u64 {
+    resource.inner.doc_count() as u64
 }
 
 rustler::init!("Elixir.ExZvec.Native");
