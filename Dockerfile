@@ -44,6 +44,7 @@ FROM elixir:1.17-otp-27-slim AS app-builder
 
 RUN apt-get update && apt-get install -y \
     build-essential git curl ca-certificates \
+    zlib1g-dev libbz2-dev \
     && rm -rf /var/lib/apt/lists/*
 
 # Copy cmake from zvec builder (needed for cxx-build)
