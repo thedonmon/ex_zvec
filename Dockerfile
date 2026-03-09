@@ -21,11 +21,13 @@ RUN git clone --depth 1 https://github.com/alibaba/zvec.git /opt/zvec && \
 
 WORKDIR /opt/zvec/build
 
-# ENABLE_NATIVE=OFF: -march=native doesn't work under qemu/Rosetta emulation
+# Disable all arch auto-detection to ensure portable binaries.
+# Default x86-64 baseline (SSE2) works on all x86_64 CPUs.
 RUN cmake .. \
     -DBUILD_SHARED_LIBS=OFF \
     -DCMAKE_POLICY_VERSION_MINIMUM=3.5 \
-    -DENABLE_NATIVE=OFF
+    -DENABLE_NATIVE=OFF \
+    -DAUTO_DETECT_ARCH=OFF
 
 # Build Arrow first (it downloads dependencies, can fail with parallel builds)
 RUN make ARROW.BUILD -j1 2>&1 || \
