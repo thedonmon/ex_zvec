@@ -132,10 +132,11 @@ fn nif_flush(resource: ResourceArc<CollectionResource>) -> NifResult<bool> {
         .map_err(|e| rustler::Error::Term(Box::new(e)))
 }
 
-/// Optimize index.
+/// Optimize index (flush + compact).
 #[rustler::nif(schedule = "DirtyCpu")]
-fn nif_optimize(_resource: ResourceArc<CollectionResource>) -> bool {
-    true
+fn nif_optimize(resource: ResourceArc<CollectionResource>) -> NifResult<bool> {
+    resource.inner.optimize()
+        .map_err(|e| rustler::Error::Term(Box::new(e)))
 }
 
 /// Get document count.

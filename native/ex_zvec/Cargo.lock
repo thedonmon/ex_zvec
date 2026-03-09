@@ -409,7 +409,7 @@ checksum = "b8848ee67ecc8aedbaf3e4122217aff892639231befc6a1b58d29fff4c2cabaa"
 [[package]]
 name = "zvec-rs"
 version = "0.1.0"
-source = "git+https://github.com/thedonmon/zvec-rs#808b2f2f5012e5d5c45110c05d3265e31337e84b"
+source = "git+https://github.com/thedonmon/zvec-rs#ca8fad0fd191ac234fba902b1826e3a737bc161f"
 dependencies = [
  "ordered-float",
  "parking_lot",
